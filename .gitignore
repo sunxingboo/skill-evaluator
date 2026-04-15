@@ -11,3 +11,7 @@ Thumbs.db
 
 # Claude Code local files
 .claude/
+
+# Temporary files
+*.tmp
+/tmp/

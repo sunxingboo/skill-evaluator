@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) | [中文](README.md)
 
-An AI Agent Skill for evaluating the quality of other Skills. It scores Skills across 8 weighted dimensions, identifies weaknesses, provides actionable improvement suggestions, and supports side-by-side comparison of multiple Skills. **Supports multi-model cross-validation** where multiple models evaluate independently, challenge each other's scores, and an arbiter produces the authoritative verdict. Automatically falls back to serial multi-perspective mode when Strategy A explicitly fails.
+An AI Agent Skill for evaluating the quality of other Skills. It scores Skills across 8 weighted dimensions, identifies weaknesses, provides actionable improvement suggestions, and supports side-by-side comparison of multiple Skills. **Supports multi-model cross-validation** where multiple models evaluate independently, challenge each other's scores, and an arbiter produces the authoritative verdict. Provides three execution strategies (subagent parallel → Qianfan API → serial multi-perspective) with automatic degradation to ensure cross-platform availability.
 
 Compatible with any AI Agent platform that supports the Skill mechanism, including Claude Code, Ducc, Xiaolongxia, and others.
 
@@ -13,8 +13,10 @@ Compatible with any AI Agent platform that supports the Skill mechanism, includi
 - **Actionable feedback** — Problem description, impact analysis, and concrete suggestions for each weak dimension
 - **Multi-Skill comparison** — Side-by-side scoring table, strengths/weaknesses analysis, and ranking
 - **Multi-model cross-validation** — Multiple models evaluate independently, then peer-review each other, with a final arbiter verdict for authoritative results
-- **Serial multi-perspective fallback** — Auto-switches when Strategy A explicitly fails: same model evaluates as Strict/Pragmatic/Expert reviewers, then cross-reviews and arbitrates
-- **Customizable models** — Prompts user to choose models first; defaults to Claude Opus 4.6 (arbiter) + Claude Sonnet 4.6 / GLM-5 / MiniMax-M2-Stable (evaluators)
+- **Qianfan API multi-model** — Calls multiple real models (ernie-5.0, deepseek-v3.2, qwen3.5, glm-5.1) via Baidu Qianfan LLM platform API, no subagent dependency
+- **Serial multi-perspective fallback** — Auto-switches when Strategy A/B are unavailable: same model evaluates as Strict/Pragmatic/Expert reviewers, then cross-reviews and arbitrates
+- **Automatic strategy degradation** — A (subagent parallel) → B (Qianfan API) → C (serial multi-perspective), transparent to users
+- **Customizable models** — Prompts user to choose models first; Strategy A defaults to Claude Opus 4.6 + Sonnet 4.6 / GLM-5 / MiniMax-M2-Stable, Strategy B defaults to ernie-5.0 / deepseek-v3.2 / qwen3.5 / glm-5.1
 
 ## Evaluation Dimensions
 
@@ -44,16 +46,32 @@ Compatible with any AI Agent platform that supports the Skill mechanism, includi
 ### Claude Code / Ducc
 
 ```bash
+# If the platform supports the skill install command
 claude skill install skill-evaluator --from github:sunxingboo/skill-evaluator
+
+# Or clone manually
+git clone https://github.com/sunxingboo/skill-evaluator.git ~/.claude/skills/skill-evaluator
 ```
 
 ### Manual
+
+Copy `SKILL.md` along with `references/` and `scripts/` directories to your Agent's skill directory:
 
 ```bash
 git clone https://github.com/sunxingboo/skill-evaluator.git ~/.claude/skills/skill-evaluator
 ```
 
-For other Agent platforms, place `SKILL.md` in the corresponding skill directory.
+## Configuration
+
+### Qianfan API (Strategy B)
+
+Strategy B calls multiple real models via the Baidu Qianfan LLM platform API. Set up the authentication token first:
+
+```bash
+export QIANFAN_BEARER_TOKEN="bce-v3/your-token-here"
+```
+
+If the token is not configured, Strategy B is unavailable and multi-model mode will automatically degrade to Strategy C (serial multi-perspective).
 
 ## Usage
 
@@ -95,7 +113,7 @@ You'll be asked whether to customize the main model and evaluator model list fir
 
 ## Cross-Validation Pipeline
 
-Automatically selects execution strategy based on actual results:
+Automatically selects execution strategy based on actual results (A → B → C degradation):
 
 ### Strategy A: Parallel Multi-Model (Default)
 
@@ -141,7 +159,45 @@ Automatically selects execution strategy based on actual results:
 └──────────────────────────────────────────────────────┘
 ```
 
-### Strategy B: Serial Multi-Perspective (Fallback when Strategy A fails)
+### Strategy B: Qianfan API Multi-Model (Fallback when Strategy A fails)
+
+```
+┌──────────────────────────────────────────────────────┐
+│  Phase 0: Confirm Model Config (ask user)            │
+│                                                      │
+│  Main model (arbiter): current Agent itself           │
+│  Evaluators: ernie-5.0 / deepseek-v3.2 /            │
+│              qwen3.5 / glm-5.1                       │
+│                                                      │
+├──────────────────────────────────────────────────────┤
+│  Phase 1: Qianfan API Parallel Evaluation            │
+│                                                      │
+│  python scripts/qianfan_chat.py --models ...         │
+│                                                      │
+│  ┌──────────┐  ┌──────────┐  ┌────────┐  ┌───────┐  │
+│  │ ernie    │  │ deepseek │  │ qwen   │  │ glm   │  │
+│  │ -5.0     │  │ -v3.2    │  │ 3.5    │  │ -5.1  │  │
+│  └────┬─────┘  └────┬─────┘  └───┬────┘  └───┬───┘  │
+│       │             │            │            │      │
+├───────┴─────────────┴────────────┴────────────┴──────┤
+│  Phase 2: Qianfan API Peer Review                    │
+│                                                      │
+│  Each model reviews others' scores                   │
+│  Flag disagreements >= 2 points                      │
+│                                                      │
+├──────────────────────────────────────────────────────┤
+│  Phase 3: Arbitration (main Agent)                   │
+│                                                      │
+│  Unanimous → average                                 │
+│  Majority  → adopt majority                          │
+│  Disputed  → judge by evidence                       │
+│                                                      │
+│  Output: final scores + consensus                    │
+│          + improvement suggestions                   │
+└──────────────────────────────────────────────────────┘
+```
+
+### Strategy C: Serial Multi-Perspective (Fallback when Strategy A/B unavailable)
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -195,10 +251,16 @@ Automatically selects execution strategy based on actual results:
 |-----------|-------|-------|
 | D1. Metadata Quality | 8/10 | Clear description with trigger conditions |
 | D2. Execution Guidance Clarity | 7/10 | Good for most cases, lacks error handling |
-| ... | ... | ... |
+| D3. Domain Knowledge Density | 9/10 | Rich expert knowledge and best practices |
+| D4. Workflow Completeness | 8/10 | Complete multi-step workflow |
+| D5. Input/Output Clarity | 7/10 | Has output format, missing input examples |
+| D6. Resource Utilization | 7/10 | N/A — no resources needed |
+| D7. Writing Quality | 8/10 | Well-structured, logical flow |
+| D8. Scope & Focus | 8/10 | Focused on a single problem domain |
 
 #### Issues & Suggestions
 1. **D2. Execution Guidance Clarity**: Missing error handling → Add branching for incomplete input
+2. **D5. Input/Output Clarity**: Missing input examples → Add 2-3 concrete input examples in usage section
 ```
 
 ### Multi-Model Cross-Validation
@@ -216,7 +278,13 @@ Automatically selects execution strategy based on actual results:
 | Dimension | Score | Notes |
 |-----------|-------|-------|
 | D1. Metadata Quality | 8/10 | ... |
-| ... | ... | ... |
+| D2. Execution Guidance Clarity | 7/10 | ... |
+| D3. Domain Knowledge Density | 9/10 | ... |
+| D4. Workflow Completeness | 8/10 | ... |
+| D5. Input/Output Clarity | 7/10 | ... |
+| D6. Resource Utilization | 7/10 | ... |
+| D7. Writing Quality | 8/10 | ... |
+| D8. Scope & Focus | 8/10 | ... |
 | **Composite** | **7.9/10 (A)** | |
 
 (GLM-5 and MiniMax-M2-Stable evaluations follow)

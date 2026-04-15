@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) | [English](README_EN.md)
 
-一个用于评估 AI Agent Skill 质量的 Skill。从 8 个维度对 Skill 进行加权打分，找出不足并给出改进建议，支持多个 Skill 横向对比。**支持多模型交叉验证**，多个模型独立评估后互相审查，由仲裁者给出权威结论。策略 A 失败时自动回退为串行多视角模式，确保跨平台可用。
+一个用于评估 AI Agent Skill 质量的 Skill。从 8 个维度对 Skill 进行加权打分，找出不足并给出改进建议，支持多个 Skill 横向对比。**支持多模型交叉验证**，多个模型独立评估后互相审查，由仲裁者给出权威结论。提供三种执行策略（subagent 并行 → 千帆 API → 串行多视角），按优先级自动降级，确保跨平台可用。
 
 兼容所有支持 Skill 机制的 AI Agent 平台，包括但不限于 Claude Code、Ducc、小龙虾等。
 
@@ -13,8 +13,10 @@
 - **改进建议** — 对每个薄弱维度给出问题描述、影响分析和具体建议
 - **多 Skill 对比** — 并列评分表、优劣势分析和排名
 - **多模型交叉验证** — 多个模型独立评估 → 两两互审挑毛病 → 仲裁者综合裁定，提升评估权威性
-- **串行多视角回退** — 策略 A 明确失败时自动切换：同一模型以严格派/务实派/专家派三视角独立评估，再交叉审查和仲裁
-- **自定义模型** — 优先询问用户指定模型；默认主模型 Claude Opus 4.6，默认评估模型 Claude Sonnet 4.6 + GLM-5 + MiniMax-M2-Stable
+- **千帆 API 多模型** — 通过百度千帆大模型平台 API 调用多个真实模型（ernie-5.0、deepseek-v3.2、qwen3.5、glm-5.1），不依赖 subagent 机制
+- **串行多视角回退** — 策略 A/B 均不可用时自动切换：同一模型以严格派/务实派/专家派三视角独立评估，再交叉审查和仲裁
+- **自动策略降级** — A（subagent 并行）→ B（千帆 API）→ C（串行多视角），对用户透明
+- **自定义模型** — 优先询问用户指定模型；策略 A 默认 Claude Opus 4.6 + Sonnet 4.6 / GLM-5 / MiniMax-M2-Stable，策略 B 默认 ernie-5.0 / deepseek-v3.2 / qwen3.5 / glm-5.1
 
 ## 评估维度
 
@@ -44,18 +46,34 @@
 ### Claude Code / Ducc
 
 ```bash
+# 若平台支持 skill install 命令
 claude skill install skill-evaluator --from github:sunxingboo/skill-evaluator
+
+# 或手动克隆
+git clone https://github.com/sunxingboo/skill-evaluator.git ~/.claude/skills/skill-evaluator
 ```
 
 ### 手动安装
 
-将 `SKILL.md` 复制到你的 Agent 的 Skill 目录。以 Claude Code / Ducc 为例：
+将 `SKILL.md` 及 `references/`、`scripts/` 目录复制到你的 Agent 的 Skill 目录。以 Claude Code / Ducc 为例：
 
 ```bash
 git clone https://github.com/sunxingboo/skill-evaluator.git ~/.claude/skills/skill-evaluator
 ```
 
 其他 Agent 平台请将 `SKILL.md` 放置到对应的 Skill 目录下。
+
+## 配置
+
+### 千帆 API（策略 B）
+
+策略 B 通过百度千帆大模型平台 API 调用多个真实模型，需提前配置认证 Token：
+
+```bash
+export QIANFAN_BEARER_TOKEN="bce-v3/your-token-here"
+```
+
+Token 未配置时策略 B 不可用，多模型模式会自动降级到策略 C（串行多视角）。
 
 ## 使用
 
@@ -99,7 +117,7 @@ git clone https://github.com/sunxingboo/skill-evaluator.git ~/.claude/skills/ski
 
 ## 交叉验证流程
 
-根据执行情况自动选择策略：
+根据执行情况自动选择策略（A → B → C 降级）：
 
 ### 策略 A：并行多模型（默认）
 
@@ -143,7 +161,44 @@ git clone https://github.com/sunxingboo/skill-evaluator.git ~/.claude/skills/ski
 └──────────────────────────────────────────────────────┘
 ```
 
-### 策略 B：串行多视角（策略 A 明确失败时回退）
+### 策略 B：千帆 API 多模型（策略 A 失败时降级）
+
+```
+┌──────────────────────────────────────────────────────┐
+│     第零阶段：确认模型配置（询问用户）                  │
+│                                                      │
+│     主模型（仲裁者）：当前 Agent 自身                  │
+│     评估模型列表：ernie-5.0 / deepseek-v3.2 /        │
+│                   qwen3.5 / glm-5.1                  │
+│                                                      │
+├──────────────────────────────────────────────────────┤
+│     第一阶段：千帆 API 并行独立评估                     │
+│                                                      │
+│   python scripts/qianfan_chat.py --models ...        │
+│                                                      │
+│   ┌──────────┐  ┌──────────┐  ┌────────┐  ┌───────┐ │
+│   │ ernie    │  │ deepseek │  │ qwen   │  │ glm   │ │
+│   │ -5.0     │  │ -v3.2    │  │ 3.5    │  │ -5.1  │ │
+│   └────┬─────┘  └────┬─────┘  └───┬────┘  └───┬───┘ │
+│        │             │            │            │     │
+├────────┴─────────────┴────────────┴────────────┴─────┤
+│     第二阶段：千帆 API 交叉互审                         │
+│                                                      │
+│   每个模型审查其他模型的评分                            │
+│   找出分歧 ≥ 2 分的维度，质疑并举证                     │
+│                                                      │
+├──────────────────────────────────────────────────────┤
+│     第三阶段：仲裁综合（主 Agent 执行）                  │
+│                                                      │
+│   一致 → 取平均                                       │
+│   多数 → 采纳多数意见                                  │
+│   分歧 → 审查论据后裁定                                │
+│                                                      │
+│   输出：最终分数 + 共识度 + 改进建议                    │
+└──────────────────────────────────────────────────────┘
+```
+
+### 策略 C：串行多视角（策略 A/B 均不可用时回退）
 
 ```
 ┌─────────────────────────────────────────────┐
